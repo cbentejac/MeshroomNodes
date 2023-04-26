@@ -4,7 +4,7 @@ from meshroom.core import desc
 
 
 class ConvertToGif(desc.CommandLineNode):
-    category = "Utils"
+    category = "Custom"
     documentation = """This node converts an input video or sequence of images into a GIF with the specified characteristics using FFMPEG."""
 
     inputs = [
