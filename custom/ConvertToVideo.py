@@ -13,14 +13,12 @@ class ConvertToVideo(desc.CommandLineNode):
             label="Input Files",
             description="Input images or video to convert into a compressed video, with or without a pattern.",
             value="",
-            uid=[0]
         ),
         desc.BoolParam(
             name="isVideo",
             label="Video Input",
             description="True if the input is a video file, false otherwise. This will disable the \"Input Extension\" parameter.",
             value=False,
-            uid=[0]
         ),
         desc.ChoiceParam(
             name="inputExtension",
@@ -31,7 +29,6 @@ class ConvertToVideo(desc.CommandLineNode):
             value="jpg",
             exclusive=True,
             enabled=lambda node: not node.isVideo.value,
-            uid=[0]
         ),
         desc.GroupAttribute(
             name="compressionOptions",
@@ -52,7 +49,6 @@ class ConvertToVideo(desc.CommandLineNode):
                     errorMessage="FFMPEG presets cannot be applied for .exr inputs. The compression type should be set to \"none\" \n"
                                   "for .exr inputs.",
                     exclusive=True,
-                    uid=[0]
                 ),
                 desc.ChoiceParam(
                     name="resolutionFps",
@@ -61,7 +57,6 @@ class ConvertToVideo(desc.CommandLineNode):
                     values=["1080p30", "720p30", "576p25", "480p30"],
                     value="1080p30",
                     exclusive=True,
-                    uid=[0]
                 ),
             ]
         ),
@@ -70,17 +65,17 @@ class ConvertToVideo(desc.CommandLineNode):
             label="Output Name",
             description="Filename of the output video.",
             value="output.mp4",
-            uid=[]
+            invalidate=False,
         ),
-        desc.IntParam(
+        desc.FloatParam(
             name="pixelRatio",
             label="Pixel Aspect Ratio",
             description="Pixel aspect ratio to take into account when generating the output video.\n"
-                        "The set aspect ratio will be applied on the width of the output video.",
-            value=1,
-            range=(1, 10, 1),
-            uid=[],
-            advanced=True
+                        "The set aspect ratio will be applied on the width of the output video.\n"
+                        "The pixel aspect ratio will still be enforced even if a custom size has been provided.",
+            value=1.0,
+            range=(1.0, 10.0, 0.1),
+            advanced=True,
         ),
         desc.GroupAttribute(
             name="customResFps",
@@ -98,7 +93,6 @@ class ConvertToVideo(desc.CommandLineNode):
                             label="Override Size",
                             description="Override the preset size with a custom one.",
                             value=False,
-                            uid=[0]
                         ),
                         desc.StringParam(
                             name="outputSize",
@@ -106,7 +100,6 @@ class ConvertToVideo(desc.CommandLineNode):
                             description="Size of the output video, written as \"width:height\" (e.g. 320:200). Setting either width or height to -1 will preserve the aspect ratio.\n"
                                         "Setting the size to \"-1:-1\" means no rescale will be applied.",
                             value="-1:-1",
-                            uid=[0],
                             advanced=True,
                             enabled=lambda node: node.customResFps.customSize.overrideRes.value
                         )
@@ -122,7 +115,6 @@ class ConvertToVideo(desc.CommandLineNode):
                             label="Override Framerate",
                             description="Override the preset framerate with a custom one.",
                             value=False,
-                            uid=[0]
                         ),
                         desc.IntParam(
                             name="framerate",
@@ -130,7 +122,6 @@ class ConvertToVideo(desc.CommandLineNode):
                             description="Framerate for the output video.",
                             value=24,
                             range=(1, 100, 1),
-                            uid=[0],
                             advanced=True,
                             enabled=lambda node: node.customResFps.customFramerate.overrideFps.value
                         )
@@ -145,8 +136,7 @@ class ConvertToVideo(desc.CommandLineNode):
             name='outputVideo',
             label='Output Video',
             description="Generated video.",
-            value=desc.Node.internalFolder + '{outputNameValue}',
-            uid=[]
+            value="{nodeCacheFolder}/{outputNameValue}",
         )
     ]
 
@@ -175,35 +165,43 @@ class ConvertToVideo(desc.CommandLineNode):
             compression = " -profile:v main -preset veryfast -movflags +faststart "
 
         # Initialize the resolution and framerate for the output
-        size = "-1:-1"
+        size = ""
         fps = "30"
+        width = "-1"
+        height = "-1"
         resolution = chunk.node.attribute("compressionOptions.resolutionFps").value
 
         # Set the resolution and framerate based on the predetermined settings. If the options to override the size
         # and/or framerate are enabled, use those custom values over the standard ones
         if chunk.node.attribute("customResFps.customSize.outputSize").enabled or chunk.node.attribute("customResFps.customFramerate.framerate").enabled:
             if chunk.node.attribute("customResFps.customSize.outputSize").enabled:
-                size = chunk.node.attribute("customResFps.customSize.outputSize").value
+                width, height = chunk.node.attribute("customResFps.customSize.outputSize").value.split(":")
             if chunk.node.attribute("customResFps.customFramerate.framerate").enabled:
-                fps = chunk.attribute("customResFps.customFramerate.framerate").value
+                fps = chunk.node.attribute("customResFps.customFramerate.framerate").value
         elif resolution == "1080p30":
-            size = "-1:1080"
+            height = "1080"
         elif resolution == "720p30":
-            size = "-1:720"
+            height = "720"
         elif resolution == "576p25":
-            size = "-1:576"
+            height = "576"
             fps = "25"
         else:
-            size = "-1:480"
+            height = "480"
 
-        # Set the pixel aspect ratio if needed
-        pixelRatio = " "
-        if chunk.node.attribute("pixelRatio").value != 1:
-            pixelRatio = " -aspect {pixelRatioValue}:1 "
+        # Set the pixel ratio if needed
+        if chunk.node.attribute("pixelRatio").value != 1.0:
+            if width == "-1":
+                width = "ceil(iw/2)*2*" + str(chunk.node.attribute("pixelRatio").value)
+                height = "ceil(ih/2)*2"
+            else:
+                width = str(int(width) * chunk.node.attribute("pixelRatio").value)
+
+        # Set the final size with the computed width and height
+        size = width + ":" + height
 
         self.commandLine = "ffmpeg -y" + isExr + patternType + "-i " + inputValue + compression + \
-                           " -c:v libx264 -level 42 -framerate " + fps + " -vf scale=" + size + pixelRatio + \
-                           "{outputVideoValue}"
+                           " -c:v libx264 -level 42 -framerate " + fps + " -vf scale=" + size + \
+                           " {outputVideoValue}"
 
         desc.CommandLineNode.processChunk(self, chunk)
 
